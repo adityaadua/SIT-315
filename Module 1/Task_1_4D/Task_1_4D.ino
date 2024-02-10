@@ -8,7 +8,7 @@ const int ledTimer = 9;                  // the pin for indicating timer
 
 int motionState = 0;
 int ambientState = 0;
-int tiltState = 1;
+int tiltState = 0;
 
 volatile bool timerFlag = false;
 
@@ -62,7 +62,7 @@ void ambientInterrupt() {
 void tiltInterrupt() {
   tiltState = digitalRead(tiltSensor);
   digitalWrite(ledTilt, tiltState);
-  if (tiltState == HIGH) {
+  if (tiltState == LOW) {
     Serial.println("Tilt Detected! - Turned Green led");
   }
 }

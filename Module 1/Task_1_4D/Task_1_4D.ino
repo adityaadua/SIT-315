@@ -1,3 +1,5 @@
+#include <avr/sleep.h>
+
 const int motionSensor = 2;              // the pin that the motion sensor is attached to
 const int ambientSensor = 3;             // the pin that the ambient light sensor is attached to
 const int tiltSensor = 4;                // the pin that the tilt sensor is attached to
@@ -8,7 +10,7 @@ const int ledTimer = 9;                  // the pin for indicating timer
 
 int motionState = 0;
 int ambientState = 0;
-int tiltState = 0;
+int tiltState = 1;
 
 volatile bool timerFlag = false;
 
@@ -16,15 +18,14 @@ void setup() {
   Serial.begin(9600);                    // initialize serial communication
   pinMode(motionSensor, INPUT);          // initialize motion sensor pin as input
   pinMode(ambientSensor, INPUT);         // initialize ambient light sensor pin as input
-  pinMode(tiltSensor, INPUT_PULLUP);     // initialize tilt sensor pin as input with internal pull-up resistor
   pinMode(ledMotion, OUTPUT);            // initialize motion LED pin as output
   pinMode(buzzer, OUTPUT);               // initialize buzzer pin as output
   pinMode(ledTilt, OUTPUT);              // initialize tilt LED pin as output
   pinMode(ledTimer, OUTPUT);             // initialize timer LED pin as output
 
-  attachInterrupt(digitalPinToInterrupt(motionSensor), motionInterrupt, CHANGE);    // attach interrupt for motion sensor
-  attachInterrupt(digitalPinToInterrupt(ambientSensor), ambientInterrupt, CHANGE);  // attach interrupt for ambient light sensor
-  attachInterrupt(digitalPinToInterrupt(tiltSensor), tiltInterrupt, CHANGE);        // attach interrupt for tilt sensor
+  // Configure PCINT for tilt sensor (pin 4)
+  PCICR |= (1 << PCIE2);          // Enable PCINT for port D (pins 0-7)
+  PCMSK2 |= (1 << PCINT20);       // Enable interrupt on pin 4 (PCINT20)
 
   // Configure Timer1 for interrupt every 1 second
   TCCR1A = 0;
@@ -37,6 +38,7 @@ void loop() {
   if (timerFlag) {
     digitalWrite(ledTimer, !digitalRead(ledTimer)); // Toggle the timer LED
     timerFlag = false;  // Reset the flag
+    sleep_cpu();  // Enter sleep mode until next interrupt
   }
 }
 
@@ -58,14 +60,18 @@ void ambientInterrupt() {
   }
 }
 
-// Tilt sensor interrupt service routine
-void tiltInterrupt() {
-  tiltState = digitalRead(tiltSensor);
-  digitalWrite(ledTilt, tiltState);
-  if (tiltState == LOW) {
+// Tilt sensor PCINT interrupt service routine
+ISR(PCINT2_vect) {
+  if (digitalRead(tiltSensor) == HIGH) {
+    tiltState = HIGH;
+    digitalWrite(ledTilt, HIGH);
     Serial.println("Tilt Detected! - Turned Green led");
+  } else {
+    tiltState = LOW;
+    digitalWrite(ledTilt, LOW);
   }
 }
+
 // Timer1 compare match interrupt service routine
 ISR(TIMER1_COMPA_vect) {
   timerFlag = true; // Set the flag indicating 1-second interval

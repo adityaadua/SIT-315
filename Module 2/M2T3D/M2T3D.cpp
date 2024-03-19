@@ -1,101 +1,109 @@
 #include <iostream>
-#include <fstream>
-#include <thread>
 #include <mutex>
-#include <queue>
-#include <chrono>
-#include <ctime>
-#include <random>
-#include <algorithm>
-#include <map>
 #include <condition_variable>
+#include <deque>
+#include <thread>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <algorithm>
+#include <chrono>
 
 using namespace std;
 
-const int NUM_TRAFFIC_LIGHTS = 4;
-const int BUFFER_SIZE = 12;
-const int MEASUREMENT_INTERVAL_SECONDS = 300;
-const int TOP_N_CONGESTED = 3;
-const int NUM_MEASUREMENTS = 12;
+struct TrafficInfo {
+    string timestamp;
+    int lightId;
+    int carsPassed;
+};
 
-mutex buffer_lock;
-condition_variable buffer_not_full, buffer_not_empty;
-queue<tuple<string, int, int>> traffic_buffer;
-map<int, int> congested_traffic_lights;
-ofstream output_file("data.txt");
+const unsigned int maxBufferSize = 10;
+const int numTrafficSignals = 10;
 
-void produce_traffic_data() {
-    while (true) {
-        for (int i = 0; i < NUM_MEASUREMENTS; ++i) {
-            auto now = chrono::system_clock::now();
-            auto now_time = chrono::system_clock::to_time_t(now);
-            string timestamp = ctime(&now_time);
-            
-            int traffic_light_id = rand() % NUM_TRAFFIC_LIGHTS + 1;
-            int cars_passed = rand() % 50 + 1;
+std::mutex mutexLock;
+std::condition_variable conditionVar;
+deque<TrafficInfo> dataBuffer;
 
-            unique_lock<mutex> lock(buffer_lock);
-            buffer_not_full.wait(lock, []{ return traffic_buffer.size() < BUFFER_SIZE; });
-
-            traffic_buffer.push(make_tuple(timestamp, traffic_light_id, cars_passed));
-            cout << "Produced: " << timestamp << ", Traffic Light ID: " << traffic_light_id << ", Cars Passed: " << cars_passed << endl;
-
-            lock.unlock();
-            buffer_not_empty.notify_one();
-
-            this_thread::sleep_for(chrono::minutes(5));
+void dataProducer(ifstream& inputFile) {
+    for (int i = 0; i < maxBufferSize; ++i) {
+        string line;
+        if (!getline(inputFile, line)) {
+            inputFile.clear();
+            inputFile.seekg(0, ios::beg);
+            getline(inputFile, line);
         }
-        this_thread::sleep_for(chrono::minutes(60 - (5 * NUM_MEASUREMENTS)));
+
+        istringstream iss(line);
+        string timestamp;
+        int lightId;
+        int carsPassed;
+        if (!(iss >> timestamp >> lightId >> carsPassed)) {
+            cerr << "Invalid input format\n";
+            continue;
+        }
+
+        TrafficInfo info = { timestamp, lightId, carsPassed };
+
+        std::unique_lock<std::mutex> locker(mutexLock);
+        dataBuffer.push_back(info);
     }
+
+    conditionVar.notify_one();
 }
 
-void consume_traffic_data() {
+void dataConsumer() {
     while (true) {
-        unique_lock<mutex> lock(buffer_lock);
-        buffer_not_empty.wait(lock, []{ return !traffic_buffer.empty(); });
+        std::unique_lock<std::mutex> locker(mutexLock);
+        conditionVar.wait(locker, []() { return !dataBuffer.empty(); });
 
-        while (!traffic_buffer.empty()) {
-            auto data = traffic_buffer.front();
-            traffic_buffer.pop();
-            string timestamp = get<0>(data);
-            int traffic_light_id = get<1>(data);
-            int cars_passed = get<2>(data);
-            if (congested_traffic_lights.find(traffic_light_id) != congested_traffic_lights.end()) {
-                congested_traffic_lights[traffic_light_id] += cars_passed;
-            } else {
-                congested_traffic_lights[traffic_light_id] = cars_passed;
-            }
+        vector<TrafficInfo> currentData;
+        currentData.reserve(dataBuffer.size());
+        while (!dataBuffer.empty()) {
+            currentData.push_back(dataBuffer.front());
+            dataBuffer.pop_front();
         }
 
-        lock.unlock();
-        buffer_not_full.notify_one();
+        locker.unlock();
 
-        vector<pair<int, int>> sorted_congested(congested_traffic_lights.begin(), congested_traffic_lights.end());
-        partial_sort(sorted_congested.begin(), sorted_congested.begin() + min(TOP_N_CONGESTED, (int)sorted_congested.size()), sorted_congested.end(),
-                     [](const pair<int, int> &a, const pair<int, int> &b) { return a.second > b.second; });
+        sort(currentData.begin(), currentData.end(), [](const TrafficInfo& a, const TrafficInfo& b) {
+            return a.carsPassed > b.carsPassed;
+        });
 
-        output_file << "Top " << TOP_N_CONGESTED << " congested traffic lights at " << chrono::system_clock::to_time_t(chrono::system_clock::now()) << " - ";
-        for (int i = 0; i < min(TOP_N_CONGESTED, (int)sorted_congested.size()); ++i) {
-            output_file << sorted_congested[i].first << " (Cars Passed: " << sorted_congested[i].second << "), ";
+        cout << "Top 5 most congested traffic signals:" << endl;
+        for (int i = 0; i < min(5, static_cast<int>(currentData.size())); ++i) {
+            cout << "Time: " << currentData[i].timestamp << ", Traffic Light ID: " << currentData[i].lightId << ", Cars Passed: " << currentData[i].carsPassed << endl;
         }
-        output_file << endl;
 
-        congested_traffic_lights.clear();
-
-        this_thread::sleep_for(chrono::hours(1));
+        if (dataBuffer.empty()) {
+            break;
+        }
     }
 }
 
 int main() {
-    srand(time(nullptr));
+    auto startTime = chrono::steady_clock::now();
 
-    thread producer_thread(produce_traffic_data);
-    thread consumer_thread(consume_traffic_data);
+    ifstream inputFile("testdata.txt");
+    if (!inputFile) {
+        cerr << "Failed to open input file\n";
+        return 1;
+    }
 
-    producer_thread.join();
-    consumer_thread.join();
+    vector<thread> producers;
 
-    output_file.close();
+    for (int i = 0; i < 8; ++i) {
+        producers.emplace_back(dataProducer, std::ref(inputFile));
+    }
+
+    for (auto& producer : producers) {
+        producer.join();
+    }
+
+    std::thread consumerThread(dataConsumer);
+    consumerThread.join();
+    auto endTime = chrono::steady_clock::now();
+    chrono::duration<double, std::milli> duration = endTime - startTime;
+    cout << "Time taken by the program: " << duration.count() << " milliseconds" << endl;
 
     return 0;
 }

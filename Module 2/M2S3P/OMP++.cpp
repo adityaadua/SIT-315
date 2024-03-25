@@ -27,37 +27,30 @@ int main() {
   // OpenMP parallel region with default(none) attribute
   #pragma omp parallel default(none) shared(size, v1, v2, v3)
   {
-    // OpenMP parallel for directive for parallel loop
     #pragma omp for
     for (int i = 0; i < size; i++) {
       v3[i] = v1[i] + v2[i];
     }
 
-    // Compute total sum using reduction clause
     int total_reduction = 0;
     #pragma omp for reduction(+:total_reduction)
     for (int i = 0; i < size; i++) {
       total_reduction += v3[i];
     }
 
-    // Compute total sum using atomic update
     int total_atomic = 0;
     #pragma omp for reduction(+:total_atomic)
     for (int i = 0; i < size; i++) {
       total_atomic += v3[i];
     }
 
-    // Compute total sum with critical section
     int total_critical = 0;
     #pragma omp for reduction(+:total_critical)
     for (int i = 0; i < size; i++) {
       total_critical += v3[i];
     }
 
-    // OpenMP barrier to synchronize threads
     #pragma omp barrier
-
-    // Print total sum computed using different methods
     #pragma omp single
     {
       cout << "Total sum (Reduction): " << total_reduction << endl;
